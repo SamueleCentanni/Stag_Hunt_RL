@@ -177,7 +177,7 @@ class StagHunt(AbstractGridGame):
                 self._move_agents(
                     agent_moves=[
                         agent_moves,
-                        self._seek_entity(self.B_AGENT, self.STAG),
+                        self._seek_entity(self.B_AGENT, self.STAG), # Returns a move which will move the seeker towards the target.
                     ]
                 )
         self._timestep += 1
