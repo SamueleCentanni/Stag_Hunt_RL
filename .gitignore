@@ -1,1 +1,8 @@
 .vscode/
+plan.md
+
+*.pt
+*png
+*.egg-info/
+*.pyc
+*.csv
