@@ -6,3 +6,5 @@ plan.md
 *.egg-info/
 *.pyc
 *.csv
+*.tex
+*.txt
