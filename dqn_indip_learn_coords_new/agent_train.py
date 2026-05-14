@@ -16,11 +16,11 @@ from ddqn_agent import Agent
 np.set_printoptions(suppress=True, precision=2)
 
 
-def train(num_episodes, arguments, grid_size=(3, 3), social_welfare=False):
+def train(num_episodes, arguments, grid_size=(3, 3), social_welfare=False, stag_follows=False, max_timesteps=200):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    env = gym.make("StagHunt-Hunt-v0", grid_size=grid_size, obs_type="coords",max_timesteps=200, stag_follows=False)
+    env = gym.make("StagHunt-Hunt-v0", grid_size=grid_size, obs_type="coords",max_timesteps=max_timesteps, stag_follows=stag_follows)
     state_size  = env.observation_space.shape[1]
     action_size = env.action_space.n
 
@@ -82,8 +82,11 @@ def train(num_episodes, arguments, grid_size=(3, 3), social_welfare=False):
                 rewards[1] = social_reward
 
 
-            agent_0.observe((obs[0], action0, new_obs[0], rewards[0], terminated))
-            agent_1.observe((obs[1], action1, new_obs[1], rewards[1], terminated))
+            # Env has no true terminals — `terminated` here is timeout truncation.
+            # Storing False keeps the bootstrap on the next state, avoiding the
+            # downward bias on Q near the horizon.
+            agent_0.observe((obs[0], action0, new_obs[0], rewards[0], False))
+            agent_1.observe((obs[1], action1, new_obs[1], rewards[1], False))
 
             if single_rewards[0] == stag_reward and single_rewards[1] == stag_reward:
                 stag_catches_episode += 1
@@ -169,18 +172,18 @@ def train(num_episodes, arguments, grid_size=(3, 3), social_welfare=False):
     plt.show()
 
 
-def test(num_episodes, arguments, grid_size=(3, 3), load_renderer=False):
+def test(num_episodes, arguments, grid_size=(3, 3), load_renderer=False, max_timesteps=200):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    env = gym.make("StagHunt-Hunt-v0", grid_size=grid_size, obs_type="coords", max_timesteps=200, load_renderer=load_renderer, stag_follows=False)
+    env = gym.make("StagHunt-Hunt-v0", grid_size=grid_size, obs_type="coords", max_timesteps=max_timesteps, load_renderer=load_renderer, stag_follows=True)
     state_size  = env.observation_space.shape[1]
     action_size = env.action_space.n
 
     agent_0 = Agent(state_size, action_size, arguments, device)
     agent_1 = Agent(state_size, action_size, arguments, device)
 
-    agent_0.policy_net.load_state_dict(torch.load(f"agent0_dueling_ddqn_per_{grid_size[0]}x{grid_size[1]}.pt", map_location=device))
-    agent_1.policy_net.load_state_dict(torch.load(f"agent1_dueling_ddqn_per_{grid_size[0]}x{grid_size[1]}.pt", map_location=device))
+    agent_0.policy_net.load_state_dict(torch.load(f"/home/samuelecentanni/Desktop/University/AAS/exam/dqn_indip_learn_coords_new/5x5_results_Stagfollows_True_diffparams/agent0_dueling_ddqn_per_5x5.pt", map_location=device))
+    agent_1.policy_net.load_state_dict(torch.load(f"/home/samuelecentanni/Desktop/University/AAS/exam/dqn_indip_learn_coords_new/5x5_results_Stagfollows_True_diffparams/agent1_dueling_ddqn_per_5x5.pt", map_location=device))
     agent_0.policy_net.eval()
     agent_1.policy_net.eval()
 
@@ -228,12 +231,14 @@ if __name__ == "__main__":
         'gamma':           0.95,
         'batch_size':      32,
         'memory_capacity': 50000,
-        'target_frequency': 1000,
-        'maximum_exploration': 500000,  
+        'target_frequency': 1000,   
+        'maximum_exploration': 3500000,  
         'num_nodes':       64,
         'filling_steps':   1000,
         'replay_steps':    4,
     }
 
-    train(num_episodes=3000, arguments=arguments, grid_size=(3, 3), social_welfare=True)
-    test(num_episodes=200, arguments=arguments, grid_size=(3, 3), load_renderer=False)
+
+    max_timesteps = 1000
+    # train(num_episodes=5000, arguments=arguments, grid_size=(5, 5), social_welfare=False, stag_follows=True, max_timesteps=max_timesteps)
+    test(num_episodes=500, arguments=arguments, grid_size=(5, 5), load_renderer=False, max_timesteps=max_timesteps)

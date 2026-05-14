@@ -19,8 +19,6 @@ class Agent:
     Dueling DDQN Agent with Prioritized Experience Replay.
     """
 
-    epsilon = MAX_EPSILON
-
     def __init__(self, state_size, action_size, arguments, device):
         """
         :param state_size:  dimension of the observation vector
@@ -45,6 +43,7 @@ class Agent:
         self.update_target_frequency  = arguments['target_frequency']
         self.max_exploration_step     = arguments['maximum_exploration']
         self.step = 0
+        self.epsilon = MAX_EPSILON
 
         # independent policy and target networks
         self.policy_net = DQN(state_size, action_size, num_nodes=arguments['num_nodes']).to(device)
@@ -113,12 +112,18 @@ class Agent:
         batch, indices, weights = self.memory.sample(self.batch_size)
         weights_tensor = torch.tensor(weights, dtype=torch.float32).to(self.device)
 
-        # unpack, single agent transitions
-        obs = torch.stack([torch.tensor(t[0], dtype=torch.float32) for t in batch]).to(self.device)
-        new_obs = torch.stack([torch.tensor(t[2], dtype=torch.float32) for t in batch]).to(self.device)
-        acts = torch.tensor([t[1] for t in batch], dtype=torch.long).to(self.device)
-        rews = torch.tensor([t[3] for t in batch], dtype=torch.float32).to(self.device)
-        dones = torch.tensor([float(t[4]) for t in batch], dtype=torch.float32).to(self.device)
+        # unpack, single agent transitions (one host→device transfer per array)
+        obs_np     = np.stack([t[0] for t in batch]).astype(np.float32)
+        new_obs_np = np.stack([t[2] for t in batch]).astype(np.float32)
+        acts_np    = np.fromiter((t[1] for t in batch), dtype=np.int64, count=len(batch))
+        rews_np    = np.fromiter((t[3] for t in batch), dtype=np.float32, count=len(batch))
+        dones_np   = np.fromiter((float(t[4]) for t in batch), dtype=np.float32, count=len(batch))
+
+        obs     = torch.from_numpy(obs_np).to(self.device)
+        new_obs = torch.from_numpy(new_obs_np).to(self.device)
+        acts    = torch.from_numpy(acts_np).to(self.device)
+        rews    = torch.from_numpy(rews_np).to(self.device)
+        dones   = torch.from_numpy(dones_np).to(self.device)
 
         # current Q values
         current_q = self.policy_net(obs).gather(1, acts.unsqueeze(1)).squeeze(1)
@@ -138,7 +143,7 @@ class Agent:
 
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10.0)
         self.optimizer.step()
 
         # update PER priorities

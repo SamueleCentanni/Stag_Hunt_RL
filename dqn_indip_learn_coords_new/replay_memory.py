@@ -26,7 +26,7 @@ from sum_tree import SumTree
 import random
 
 class PERBuffer:
-    def __init__(self, capacity, alpha=0.6, beta_start=0.4, beta_frames=300000, epsilon=1e-5):
+    def __init__(self, capacity, alpha=0.6, beta_start=0.4, beta_frames=200000, epsilon=1e-5):
         """
         :param capacity:     max number of transitions
         :param alpha:        how much prioritization (0=uniform, 1=full)
