@@ -16,11 +16,11 @@ from ddqn_agent import Agent
 np.set_printoptions(suppress=True, precision=2)
 
 
-def train(num_episodes, arguments, grid_size=(3, 3)):
+def train(num_episodes, arguments, grid_size=(3, 3), social_welfare=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    env = gym.make("StagHunt-Hunt-v0", grid_size=grid_size, obs_type="coords",max_timesteps=200 )
+    env = gym.make("StagHunt-Hunt-v0", grid_size=grid_size, obs_type="coords",max_timesteps=200, stag_follows=False)
     state_size  = env.observation_space.shape[1]
     action_size = env.action_space.n
 
@@ -42,7 +42,7 @@ def train(num_episodes, arguments, grid_size=(3, 3)):
     total_step        = 0
 
     # CSV reward log
-    log_path = os.path.join(os.path.dirname(__file__), "reward_log.csv")
+    log_path = os.path.join(os.path.dirname(__file__), f"reward_log_{grid_size[0]}x{grid_size[1]}.csv")
     log_file = open(log_path, "w", newline="")
     log_writer = csv.writer(log_file)
     log_writer.writerow([
@@ -74,20 +74,28 @@ def train(num_episodes, arguments, grid_size=(3, 3)):
             new_obs, rewards, terminated, truncated, _ = env.step([action0, action1])
 
             # store single-agent transitions in separate buffers
+            rewards = list(rewards)
+            single_rewards = rewards[:]
+            if social_welfare:
+                social_reward = rewards[0] + rewards[1]
+                rewards[0] = social_reward
+                rewards[1] = social_reward
+
+
             agent_0.observe((obs[0], action0, new_obs[0], rewards[0], terminated))
             agent_1.observe((obs[1], action1, new_obs[1], rewards[1], terminated))
 
-            if rewards[0] == stag_reward and rewards[1] == stag_reward:
+            if single_rewards[0] == stag_reward and single_rewards[1] == stag_reward:
                 stag_catches_episode += 1
             for k in (0, 1):
-                r = rewards[k]
+                r = single_rewards[k]
                 if r == forage_reward:
                     forage_count[k] += 1
                 elif r == maul_punish:
                     maul_count[k] += 1
                 elif r == 0:
                     zero_count[k] += 1
-            ep_reward += rewards
+            ep_reward += single_rewards
 
             obs = new_obs
             total_step += 1
@@ -135,8 +143,8 @@ def train(num_episodes, arguments, grid_size=(3, 3)):
     env.close()
 
     # save models
-    torch.save(agent_0.policy_net.state_dict(), "agent0_dueling_ddqn_per.pt")
-    torch.save(agent_1.policy_net.state_dict(), "agent1_dueling_ddqn_per.pt")
+    torch.save(agent_0.policy_net.state_dict(), f"agent0_dueling_ddqn_per_{grid_size[0]}x{grid_size[1]}.pt")
+    torch.save(agent_1.policy_net.state_dict(), f"agent1_dueling_ddqn_per_{grid_size[0]}x{grid_size[1]}.pt")
 
     # plot
     episode_rewards = rewards_list[0] + rewards_list[1]
@@ -157,22 +165,22 @@ def train(num_episodes, arguments, grid_size=(3, 3)):
     ax2.set_title("Dueling DDQN PER – Cooperation rate")
 
     plt.tight_layout()
-    plt.savefig("dueling_ddqn_per.png")
+    plt.savefig(f"dueling_ddqn_per_{grid_size[0]}x{grid_size[1]}.png")
     plt.show()
 
 
 def test(num_episodes, arguments, grid_size=(3, 3), load_renderer=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    env = gym.make("StagHunt-Hunt-v0", grid_size=grid_size, obs_type="coords", load_renderer=load_renderer)
+    env = gym.make("StagHunt-Hunt-v0", grid_size=grid_size, obs_type="coords", max_timesteps=200, load_renderer=load_renderer, stag_follows=False)
     state_size  = env.observation_space.shape[1]
     action_size = env.action_space.n
 
     agent_0 = Agent(state_size, action_size, arguments, device)
     agent_1 = Agent(state_size, action_size, arguments, device)
 
-    agent_0.policy_net.load_state_dict(torch.load("agent0_dueling_ddqn_per.pt", map_location=device))
-    agent_1.policy_net.load_state_dict(torch.load("agent1_dueling_ddqn_per.pt", map_location=device))
+    agent_0.policy_net.load_state_dict(torch.load(f"agent0_dueling_ddqn_per_{grid_size[0]}x{grid_size[1]}.pt", map_location=device))
+    agent_1.policy_net.load_state_dict(torch.load(f"agent1_dueling_ddqn_per_{grid_size[0]}x{grid_size[1]}.pt", map_location=device))
     agent_0.policy_net.eval()
     agent_1.policy_net.eval()
 
@@ -221,11 +229,11 @@ if __name__ == "__main__":
         'batch_size':      32,
         'memory_capacity': 50000,
         'target_frequency': 1000,
-        'maximum_exploration': 500000,  # deve essere >> step totali early training
+        'maximum_exploration': 500000,  
         'num_nodes':       64,
         'filling_steps':   1000,
         'replay_steps':    4,
     }
 
-    # train(num_episodes=3000, arguments=arguments, grid_size=(3, 3))
-    test(num_episodes=200, arguments=arguments, grid_size=(5, 5), load_renderer=False)
+    train(num_episodes=3000, arguments=arguments, grid_size=(3, 3), social_welfare=True)
+    test(num_episodes=200, arguments=arguments, grid_size=(3, 3), load_renderer=False)
