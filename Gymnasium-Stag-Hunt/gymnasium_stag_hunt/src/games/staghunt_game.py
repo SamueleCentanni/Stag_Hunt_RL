@@ -69,6 +69,7 @@ class StagHunt(AbstractGridGame):
 
         # State Variables
         self._tagged_plants = []  # harvested plants that need to be re-spawned
+        self._capture_flash_pos = None  # set to capture cell for one render frame
 
         # Entity Positions
         self._stag_pos = zeros(2, dtype=uint8)
@@ -164,6 +165,9 @@ class StagHunt(AbstractGridGame):
                             action according to its established policy.
         :return: observation, rewards, is the game done
         """
+        # Clear capture flash from previous step
+        self._capture_flash_pos = None
+
         # Move Entities
         self._move_stag()
         if self._enable_multiagent:
@@ -187,6 +191,7 @@ class StagHunt(AbstractGridGame):
 
         # Reset prey if it was caught
         if iteration_rewards == (self._stag_reward, self._stag_reward):
+            self._capture_flash_pos = [int(self.STAG[0]), int(self.STAG[1])]
             self.STAG = place_entity_in_unoccupied_cell(
                 grid_dims=self.GRID_DIMENSIONS,
                 used_coordinates=self.PLANTS + self.AGENTS + [self.STAG],
@@ -279,6 +284,7 @@ class StagHunt(AbstractGridGame):
             used_coordinates=self.AGENTS + [self.STAG],
         )
         self._timestep = 0
+        self._capture_flash_pos = None
 
     """
     Properties
@@ -307,4 +313,5 @@ class StagHunt(AbstractGridGame):
             "b_agent": self.B_AGENT,
             "stag": self.STAG,
             "plants": self.PLANTS,
+            "capture_flash": self._capture_flash_pos,
         }
