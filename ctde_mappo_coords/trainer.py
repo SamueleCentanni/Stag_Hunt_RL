@@ -190,7 +190,7 @@ def test(
 
             if load_renderer:
                 env.unwrapped.render()
-                time.sleep(0.3)
+                time.sleep(0.7)
 
             if terminated or truncated:
                 break
@@ -228,7 +228,7 @@ def test(
 if __name__ == "__main__":
     hparams = {
         "n_agents":       2,
-        "rollout_steps":  256,
+        "rollout_steps":  2048,
         "n_epochs":       4,
         "batch_size":     64,
         "clip_ratio":     0.2,
@@ -241,6 +241,6 @@ if __name__ == "__main__":
         "log_interval":   10,
     }
 
-    # train( total_timesteps=500_000, hparams=hparams, grid_size=(7, 7), max_timesteps=200, stag_follows=True, eval_interval=10, eval_episodes=10)
+    # train( total_timesteps=2_000_000, hparams=hparams, grid_size=(5, 5), max_timesteps=200, stag_follows=False, eval_interval=10, eval_episodes=50)
 
-    test( model_path="mappo_7x7.pt", hparams=hparams, grid_size=(5, 5), n_episodes=100, load_renderer=True)
+    test(model_path="mappo_5x5.pt", hparams=hparams, grid_size=(5,5), n_episodes=100, load_renderer=False, stag_follows=False)

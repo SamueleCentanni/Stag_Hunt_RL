@@ -6,10 +6,11 @@ class RolloutBuffer:
     """
     On-policy rollout buffer for single-env CTDE MAPPO.
 
-    Stores per-agent rewards and log-probabilities together with a single
-    joint-state value V(s) per timestep. Generalized Advantage Estimation
-    is computed per-agent by broadcasting the shared baseline V(s) across
-    agents.
+    Stores the team reward (sum of per-agent rewards) and per-agent
+    log-probabilities together with a single joint-state value V(s) per
+    timestep. Generalized Advantage Estimation is computed on the team
+    return; advantages are broadcast across agents only inside the actor
+    loss.
 
     :param size: Number of environment steps stored per rollout (T).
     :param obs_dim: Dimension of a single-agent observation vector.
@@ -28,12 +29,12 @@ class RolloutBuffer:
 
         self.obs = np.zeros((size, n_agents, obs_dim), dtype=np.float32)
         self.actions = np.zeros((size, n_agents), dtype=np.int64)
-        self.rewards = np.zeros((size, n_agents), dtype=np.float32)
+        self.rewards = np.zeros((size,), dtype=np.float32)
         self.log_probs = np.zeros((size, n_agents), dtype=np.float32)
         self.values = np.zeros((size,), dtype=np.float32)
         self.ep_starts = np.zeros((size,), dtype=np.float32)
-        self.advantages = np.zeros((size, n_agents), dtype=np.float32)
-        self.returns = np.zeros((size, n_agents), dtype=np.float32)
+        self.advantages = np.zeros((size,), dtype=np.float32)
+        self.returns = np.zeros((size,), dtype=np.float32)
 
         self.pos = 0
 
@@ -47,7 +48,8 @@ class RolloutBuffer:
 
         :param obs: Per-agent observation, shape (n_agents, obs_dim).
         :param action: Per-agent action indices, shape (n_agents,).
-        :param reward: Per-agent reward, shape (n_agents,).
+        :param reward: Per-agent reward, shape (n_agents,). Stored as the
+            scalar team reward (sum across agents) — see class docstring.
         :param ep_start: True iff this step is the first of a new episode.
         :param value: Centralized critic value V(s) for the joint state (scalar).
         :param log_prob: Per-agent log-prob of the sampled action, shape (n_agents,).
@@ -55,7 +57,7 @@ class RolloutBuffer:
         i = self.pos
         self.obs[i] = obs
         self.actions[i] = action
-        self.rewards[i] = reward
+        self.rewards[i] = float(np.asarray(reward).sum())
         self.ep_starts[i] = float(ep_start)
         self.values[i] = float(value)
         self.log_probs[i] = log_prob
@@ -65,16 +67,17 @@ class RolloutBuffer:
         """
         Run the GAE(lambda) backward pass to fill `advantages` and `returns`.
 
-        The shared joint-state value V(s) is broadcast across agents, so the
-        TD error at step t becomes:
-            delta_t^i = r_t^i + gamma * V(s_{t+1}) * (1 - done) - V(s_t)
-        yielding one advantage per agent while keeping a single critic head.
+        The critic predicts a single joint V(s) and regresses on the
+        discounted team return. The TD error at step t is:
+            delta_t = r_team_t + gamma * V(s_{t+1}) * (1 - done) - V(s_t)
+        The resulting scalar advantage is broadcast across agents inside the
+        actor loss.
 
         :param last_value: Bootstrap V(s) estimate for the state after the
             final stored transition.
         :param last_done: True iff the final stored transition was terminal.
         """
-        gae = np.zeros(self.n_agents, dtype=np.float32)
+        gae = 0.0
 
         for t in reversed(range(self.size)):
             if t == self.size - 1:
@@ -88,7 +91,7 @@ class RolloutBuffer:
             gae = delta + self.gamma * self.gae_lambda * next_non_terminal * gae
             self.advantages[t] = gae
 
-        self.returns = self.advantages + self.values[:, None]
+        self.returns = self.advantages + self.values
 
     def get_minibatches(self, batch_size):
         """

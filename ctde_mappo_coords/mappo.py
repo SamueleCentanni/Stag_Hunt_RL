@@ -14,6 +14,42 @@ from buffer import RolloutBuffer
 
 # Centralized Training, Decentralized Execution (CTDE) MAPPO implementation.
 
+
+class RunningMeanStd:
+    """Welford-style running mean/std used for input and return normalization."""
+
+    def __init__(self, shape=(), epsilon=1e-4):
+        self.mean = np.zeros(shape, dtype=np.float64)
+        self.var = np.ones(shape, dtype=np.float64)
+        self.count = epsilon
+
+    def update(self, x):
+        x = np.asarray(x, dtype=np.float64)
+        if x.ndim == 0:
+            x = x[None]
+        # Flatten everything except the last (feature) axis when shape is non-scalar.
+        if self.mean.shape == ():
+            x_flat = x.reshape(-1)
+        else:
+            x_flat = x.reshape(-1, self.mean.shape[0])
+        batch_mean = x_flat.mean(axis=0)
+        batch_var = x_flat.var(axis=0)
+        batch_count = x_flat.shape[0]
+        delta = batch_mean - self.mean
+        tot_count = self.count + batch_count
+        new_mean = self.mean + delta * batch_count / tot_count
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        m2 = m_a + m_b + (delta ** 2) * self.count * batch_count / tot_count
+        self.mean = new_mean
+        self.var = m2 / tot_count
+        self.count = tot_count
+
+    @property
+    def std(self):
+        return np.sqrt(self.var) + 1e-8
+
+
 class CriticNetwork(nn.Module):
     def __init__(self, obs_dim, n_agents=2, hidden_dim=128):
         super().__init__()
@@ -123,9 +159,18 @@ class MAPPO:
         self.num_trains = 0
 
         self.create_actor_critic(self.env)
-        actor_params = list(self.actor_network.parameters())
-        critic_params = list(self.critic_network.parameters())
-        self.optimizer = optim.Adam(actor_params + critic_params, lr=self.lr)
+        # Separate optimizers (MAPPO paper: independent Adam updates on θ and φ)
+        self.actor_optim = optim.Adam(self.actor_network.parameters(), lr=self.lr)
+        self.critic_optim = optim.Adam(self.critic_network.parameters(), lr=self.lr)
+
+        # Running statistics for input and return normalization
+        obs_dim = self.env.observation_space.shape[-1]
+        self.obs_rms = RunningMeanStd(shape=(obs_dim,))
+        self.ret_rms = RunningMeanStd(shape=())
+
+        # Initial entropy coefficient kept for linear annealing in learn()
+        self.ent_coef_init = self.ent_coef
+        self.ent_coef_final = 1e-3
 
 
     def create_actor_critic(self, env):
@@ -140,6 +185,12 @@ class MAPPO:
             obs_dim=obs_dim, action_dim=action_dim, hidden_dim=64
         ).to(self.device)
 
+    def _normalize_obs(self, obs_t):
+        """Apply running per-feature obs normalization (obs_t can be (..., obs_dim))."""
+        mean = torch.as_tensor(self.obs_rms.mean, dtype=torch.float32, device=self.device)
+        std = torch.as_tensor(self.obs_rms.std, dtype=torch.float32, device=self.device)
+        return (obs_t - mean) / std
+
     def predict(self, obs, deterministic=False):
         """
         Run actor on per-agent obs and critic on joint obs.
@@ -149,6 +200,7 @@ class MAPPO:
         :return: actions (n_agents,), log_probs (n_agents,), value (scalar).
         """
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
+        obs_t = self._normalize_obs(obs_t)
 
         with torch.no_grad():
             batch_policy = self.actor_network(obs_t)
@@ -197,7 +249,8 @@ class MAPPO:
                 rewards = np.asarray(rewards, dtype=np.float32)  # (n_agents,)
                 done = bool(terminated or truncated)
 
-                # Per-agent reward; centralized critic value V(s) is shared across agents.
+                # Buffer stores team reward (sum of per-agent rewards) for the
+                # centralized critic; per-agent log-probs are kept for the actor.
                 self.rollout_buffer.add(
                     obs=obs,
                     action=actions,
@@ -220,6 +273,10 @@ class MAPPO:
         self.rollout_buffer.compute_returns_and_advantage(
             last_value=last_value, last_done=last_episode_start
         )
+
+        # Update running statistics from this rollout (use raw, unnormalized data)
+        self.obs_rms.update(self.rollout_buffer.obs)
+        self.ret_rms.update(self.rollout_buffer.returns)
 
     def compute_loss(self, batch):
         """
@@ -258,10 +315,13 @@ class MAPPO:
         actions = batch["actions"]          # (B, n_agents)
         old_logp = batch["old_logp"]        # (B, n_agents)
         old_values = batch["old_values"]    # (B,)
-        advantages = batch["advantages"]    # (B, n_agents)
-        returns = batch["returns"]          # (B, n_agents)
+        advantages = batch["advantages"]    # (B,)  team-reward advantages
+        returns = batch["returns"]          # (B,)  team-reward returns
 
         B, A, D = obs.shape # Batch (size), (num) Agents, (obs) Dimension
+
+        # Apply running per-feature obs normalization (same as during rollout)
+        obs = self._normalize_obs(obs)
 
         # Normalize advantages across the minibatch for stable updates
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -273,34 +333,33 @@ class MAPPO:
         new_logp = batch_policy.log_prob(flat_actions).reshape(B, A)
         entropy = batch_policy.entropy().reshape(B, A)
 
-        # PPO clipped surrogate objective
+        # PPO clipped surrogate objective — same team advantage for both agents
+        adv_exp = advantages.unsqueeze(-1).expand(B, A)
         ratio = torch.exp(new_logp - old_logp)
         clipped_ratio = torch.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio)
-        actor_loss = -torch.mean(torch.min(ratio * advantages, clipped_ratio * advantages))
+        actor_loss = -torch.mean(torch.min(ratio * adv_exp, clipped_ratio * adv_exp))
 
-        # --- Critic: one V(s) per joint state, broadcast over agents ---
-        # Value clipping (Yu et al. 2022): take the worst of the unclipped and
-        # clipped squared errors to keep the critic close to its old prediction.
-        # L_critic = E[ max( (V_φ(s) - R̂)²,  (clip(V_φ(s), V_old(s) ± ε) - R̂)² ) ]
-
-        
+        # --- Critic: one V(s) regresses on team return.
+        # Returns are rescaled by running std before the MSE so the loss
+        # magnitude stays roughly constant as policy performance grows.
+        ret_std = float(self.ret_rms.std)
+        ret_mean = float(self.ret_rms.mean)
         values = self.critic_network(obs).squeeze(-1)  # (B,)
         values_clipped = old_values + torch.clamp(
             values - old_values, -self.clip_ratio, self.clip_ratio
         )
-        values_exp = values.unsqueeze(-1).expand(B, A)            # (B, A)
-        values_clipped_exp = values_clipped.unsqueeze(-1).expand(B, A)
-        unclipped_loss = (values_exp - returns) ** 2
-        clipped_loss = (values_clipped_exp - returns) ** 2
+        v_n = (values - ret_mean) / ret_std
+        v_clip_n = (values_clipped - ret_mean) / ret_std
+        ret_n = (returns - ret_mean) / ret_std
+        unclipped_loss = (v_n - ret_n) ** 2
+        clipped_loss = (v_clip_n - ret_n) ** 2
         critic_loss = torch.max(unclipped_loss, clipped_loss).mean()
 
         entropy_loss = -entropy.mean()
 
-        total_loss = (
-            actor_loss
-            + self.vf_coef * critic_loss
-            + self.ent_coef * entropy_loss
-        )
+        # Separate losses: paper uses independent Adam updates on θ and φ.
+        actor_total = actor_loss + self.ent_coef * entropy_loss
+        critic_total = self.vf_coef * critic_loss
 
         metrics = {
             "actor_loss": actor_loss.item(),
@@ -308,7 +367,7 @@ class MAPPO:
             "entropy": entropy.mean().item(),
             "ratio": ratio.mean().item(),
         }
-        return total_loss, metrics
+        return actor_total, critic_total, metrics
 
     def train(self):
         """
@@ -320,20 +379,26 @@ class MAPPO:
 
         :return: Dict of mean metrics aggregated across all minibatches.
         """
-        all_params = (
-            list(self.actor_network.parameters())
-            + list(self.critic_network.parameters())
-        )
         agg = {"actor_loss": 0.0, "critic_loss": 0.0, "entropy": 0.0, "ratio": 0.0}
         n_updates = 0
 
         for _ in range(self.n_epochs):
             for batch in self.rollout_buffer.get_minibatches(self.batch_size):
-                self.optimizer.zero_grad()
-                loss, metrics = self.compute_loss(batch)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(all_params, max_norm=self.max_grad_norm)
-                self.optimizer.step()
+                actor_total, critic_total, metrics = self.compute_loss(batch)
+
+                self.actor_optim.zero_grad()
+                actor_total.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.actor_network.parameters(), self.max_grad_norm
+                )
+                self.actor_optim.step()
+
+                self.critic_optim.zero_grad()
+                critic_total.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.critic_network.parameters(), self.max_grad_norm
+                )
+                self.critic_optim.step()
 
                 for k in agg:
                     agg[k] += metrics[k]
@@ -389,15 +454,28 @@ class MAPPO:
             {
                 "actor": self.actor_network.state_dict(),
                 "critic": self.critic_network.state_dict(),
+                "obs_rms_mean": self.obs_rms.mean,
+                "obs_rms_var": self.obs_rms.var,
+                "obs_rms_count": self.obs_rms.count,
+                "ret_rms_mean": self.ret_rms.mean,
+                "ret_rms_var": self.ret_rms.var,
+                "ret_rms_count": self.ret_rms.count,
             },
             path,
         )
 
     def load(self, path):
         """Load actor and critic weights from ``path``."""
-        ckpt = torch.load(path, map_location=self.device)
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.actor_network.load_state_dict(ckpt["actor"])
         self.critic_network.load_state_dict(ckpt["critic"])
+        if "obs_rms_mean" in ckpt:
+            self.obs_rms.mean = ckpt["obs_rms_mean"]
+            self.obs_rms.var = ckpt["obs_rms_var"]
+            self.obs_rms.count = ckpt["obs_rms_count"]
+            self.ret_rms.mean = ckpt["ret_rms_mean"]
+            self.ret_rms.var = ckpt["ret_rms_var"]
+            self.ret_rms.count = ckpt["ret_rms_count"]
 
     def evaluate(self, n_episodes=10, deterministic=True, render=False):
         """
@@ -490,6 +568,11 @@ class MAPPO:
         while self.num_steps < total_timesteps:
             prev_steps = self.num_steps
             self.collect_rollouts(self.rollout_steps)
+            # Linear entropy-coefficient annealing: init -> final over the budget
+            frac = min(1.0, self.num_steps / max(1, total_timesteps))
+            self.ent_coef = self.ent_coef_final + (
+                self.ent_coef_init - self.ent_coef_final
+            ) * (1.0 - frac)
             metrics = self.train()
             self.rollout_buffer.reset()
             iteration += 1
