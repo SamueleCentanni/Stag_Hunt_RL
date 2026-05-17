@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 # I will implement a Dueling DQN, where I combine two branches and then I will merge them
-#           ┌─ Dense → Dense → V(s)    [1 output]  ─┐
-# input ───┤                                          ├→ Q(s,a)
+#           ┌─ Dense → Dense → V(s)    [1 output] ──┐
+# input ───┤                                          ├-> Q(s,a)
 #           └─ Dense → Dense → A(s,a)  [n output] ──┘
 
 # The first branch estimates V(s), i.e. the value function

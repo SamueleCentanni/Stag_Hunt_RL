@@ -35,13 +35,13 @@ class Agent:
             maximum_exploration: steps over which epsilon decays
             num_nodes:           hidden layer size
         """
-        self.state_size   = state_size
-        self.action_size  = action_size
-        self.device       = device
-        self.gamma        = arguments['gamma']
-        self.batch_size   = arguments['batch_size']
-        self.update_target_frequency  = arguments['target_frequency']
-        self.max_exploration_step     = arguments['maximum_exploration']
+        self.state_size = state_size
+        self.action_size = action_size
+        self.device = device
+        self.gamma = arguments['gamma']
+        self.batch_size = arguments['batch_size']
+        self.update_target_frequency = arguments['target_frequency']
+        self.max_exploration_step = arguments['maximum_exploration']
         self.step = 0
         self.epsilon = MAX_EPSILON
 
@@ -49,15 +49,14 @@ class Agent:
         self.policy_net = DQN(state_size, action_size, num_nodes=arguments['num_nodes']).to(device)
         self.target_net = DQN(state_size, action_size, num_nodes=arguments['num_nodes']).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.target_net.eval() # we don't train it directly, we just use it to predict the target Q values
+        self.target_net.eval() # we don't train it directly, we just use it to predict the target Q values and we update its weights with the ones from policy net
 
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=arguments['learning_rate'])
-        self.loss_fn   = nn.SmoothL1Loss(reduction='none')  # per-sample loss for IS weighting
+        self.loss_fn = nn.SmoothL1Loss(reduction='none')  # per-sample loss for IS weighting
 
         self.memory = PERBuffer(arguments['memory_capacity'])
 
     #  action selection 
-
     def act(self, state):
         """
         Epsilon-greedy action selection using the policy net.
@@ -68,24 +67,23 @@ class Agent:
         if np.random.rand() <= self.epsilon:
             return random.randrange(self.action_size)
         with torch.no_grad():
-            q = self.policy_net(torch.tensor(state, dtype=torch.float32).to(self.device))
+            state_t = torch.tensor(state, dtype=torch.float32).to(self.device)
+            q = self.policy_net(state_t)
             return q.argmax().item()
 
-    #  storing transitions 
-
+    # storing transitions 
     def observe(self, transition):
         """
         Stores a transition in the PER buffer with max priority so it is
         sampled at least once. The real TD-error is computed in replay()
         and used to refine the priority there.
 
-        :param transition: tuple (obs, action, new_obs, reward, terminated)
-                           note: single agent transition, not the joint one
+        :param transition: tuple (obs, action, new_obs, reward, terminated) (single agent transition)
+                           
         """
         self.memory.add(self.memory.max_priority, transition)
 
     # epsilon decay 
-
     def decay_epsilon(self):
         """
         Linearly decays epsilon from MAX_EPSILON to MIN_EPSILON
@@ -99,31 +97,32 @@ class Agent:
             self.epsilon = MIN_EPSILON
 
     # training step 
-
     def replay(self):
         """
         Samples a batch from PER and performs one DDQN gradient update.
         Loss is weighted by Importance Sampling weights.
         Priorities are updated after the gradient step.
         """
+
+        # replay only if there are enough samples in buffer
         if len(self.memory) < self.batch_size:
             return
 
-        batch, indices, weights = self.memory.sample(self.batch_size)
-        weights_tensor = torch.tensor(weights, dtype=torch.float32).to(self.device)
+        batch, indices, IS_weights = self.memory.sample(self.batch_size)
+        weights_tensor = torch.tensor(IS_weights, dtype=torch.float32).to(self.device)
 
-        # unpack, single agent transitions (one host→device transfer per array)
-        obs_np     = np.stack([t[0] for t in batch]).astype(np.float32)
+        # unpack, single agent transitions (obs, action, new_obs, reward, terminated)
+        obs_np = np.stack([t[0] for t in batch]).astype(np.float32)
         new_obs_np = np.stack([t[2] for t in batch]).astype(np.float32)
-        acts_np    = np.fromiter((t[1] for t in batch), dtype=np.int64, count=len(batch))
-        rews_np    = np.fromiter((t[3] for t in batch), dtype=np.float32, count=len(batch))
-        dones_np   = np.fromiter((float(t[4]) for t in batch), dtype=np.float32, count=len(batch))
+        acts_np = np.fromiter((t[1] for t in batch), dtype=np.int64, count=len(batch))
+        rews_np = np.fromiter((t[3] for t in batch), dtype=np.float32, count=len(batch))
+        dones_np = np.fromiter((float(t[4]) for t in batch), dtype=np.float32, count=len(batch))
 
-        obs     = torch.from_numpy(obs_np).to(self.device)
+        obs = torch.from_numpy(obs_np).to(self.device)
         new_obs = torch.from_numpy(new_obs_np).to(self.device)
-        acts    = torch.from_numpy(acts_np).to(self.device)
-        rews    = torch.from_numpy(rews_np).to(self.device)
-        dones   = torch.from_numpy(dones_np).to(self.device)
+        acts = torch.from_numpy(acts_np).to(self.device)
+        rews = torch.from_numpy(rews_np).to(self.device)
+        dones = torch.from_numpy(dones_np).to(self.device)
 
         # current Q values
         current_q = self.policy_net(obs).gather(1, acts.unsqueeze(1)).squeeze(1)
@@ -134,10 +133,7 @@ class Agent:
             max_next_q = self.target_net(new_obs).gather(1, best_actions.unsqueeze(1)).squeeze(1)
             target_q = rews + self.gamma * max_next_q * (1.0 - dones)
 
-
         # Train
-        # IS-weighted loss
-        td_errors = (current_q - target_q).abs()
         loss_per_sample = self.loss_fn(current_q, target_q)
         loss = (weights_tensor * loss_per_sample).mean()
 
@@ -147,6 +143,8 @@ class Agent:
         self.optimizer.step()
 
         # update PER priorities
+        # IS-weighted loss
+        td_errors = (current_q - target_q).abs()
         self.memory.update(indices, td_errors.detach().cpu().numpy())
 
     # target network sync 

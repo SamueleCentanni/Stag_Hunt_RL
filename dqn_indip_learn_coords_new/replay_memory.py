@@ -1,25 +1,9 @@
 # Prioritized Experience Replay (PER)
-# Idea: by treating all samples the same, we are ignoring a simple intuition from the real world, that is, we can potentially learn more from the experiences for which the outcomes differ more from our expectations. 
-# To leverage this fact, prioritized experience replat samples experiences with probability p_t proportional to the absolute difference between the target and estimation values for this experience which is known as TD error
+# Idea: by treating all samples the same, we are ignoring a simple intuition from the real world, that is, we can potentially learn more from the experiences 
+# for which the outcomes differ more from our expectations. 
+# To leverage this fact, prioritized experience replay (PER) samples experiences with probability p_t proportional to the absolute difference between the target
+# and estimation values for this experience: this is known as TD error
 
-
-
-
-"""
-Cos'è la PER
-Con il replay buffer uniforme (quello che hai già), ogni transizione ha la stessa probabilità di essere campionata. Ma alcune transizioni sono più "sorprendenti" di altre — quelle dove l'errore TD è alto, cioè dove la rete si sbagliava di più.
-La Prioritized Experience Replay campiona le transizioni con probabilità proporzionale al loro TD-error:
-P(i) = p_i^α / Σ p_k^α
-Dove p_i è la priorità della transizione i (= TD-error), e α controlla quanto pesare le priorità (α=0 → uniforme, α=1 → completamente prioritizzato).
-
-Il problema: bias
-Campionare non uniformemente introduce un bias — le transizioni ad alta priorità vengono viste troppo spesso. Si corregge con Importance Sampling weights:
-w_i = (1 / N · 1/P(i))^β
-β parte basso (0.4) e cresce fino a 1 durante il training — all'inizio il bias non importa molto, verso la fine del training deve essere corretto completamente.
-Beta annealing corrects the bias introduced by non-uniform sampling.
-
-In order to speed up the PER buffer, we need to define a sum_tree to efficiently sample accordingly to transitions priorities, where a transition is a sample in the buffer (obs, actions, new_obs, rewards, terminated), and the priority is a number telling us how important is that transition for learning, and it is based on the TD-error = |r + γ * max Q(s', a') - Q(s, a)|
-"""
 
 import numpy as np
 from sum_tree import SumTree
@@ -30,7 +14,7 @@ class PERBuffer:
         """
         :param capacity:     max number of transitions
         :param alpha:        how much prioritization (0=uniform, 1=full)
-        :param beta_start:   initial Importance Sampling correction (grows to 1.0)
+        :param beta_start:   initial Importance Sampling correction 
         :param beta_frames:  over how many steps beta anneals to 1.0
         :param epsilon:      small constant to avoid zero priority
         """
@@ -90,11 +74,14 @@ class PERBuffer:
         self.frame += 1
 
         # max weight for normalization (corresponds to min priority)
-        min_prob = np.min(self.tree.tree[-self.tree.capacity:][self.tree.tree[-self.tree.capacity:] > 0])
+        leaves = self.tree.tree[-self.tree.capacity:]
+        # I only want the min leaves value s.t. the value is > 0
+        min_prob = np.min(leaves[leaves > 0])
+        
         min_prob /= self.tree.total()
 
         # w_i = (1 / N · 1/P(i))^β
-        max_weight = (min_prob * len(self.tree)) ** (-self.beta)
+        max_weight = (min_prob * len(self.tree)) ** (-self.beta) # to normalize the weights in [0, 1]
 
         for i in range(n):
             left = segment * i
