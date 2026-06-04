@@ -25,6 +25,7 @@ class RunningMeanStd:
 
     def update(self, x):
         x = np.asarray(x, dtype=np.float64)
+
         if x.ndim == 0:
             x = x[None]
         # Flatten everything except the last (feature) axis when shape is non-scalar.
@@ -32,8 +33,10 @@ class RunningMeanStd:
             x_flat = x.reshape(-1)
         else:
             x_flat = x.reshape(-1, self.mean.shape[0])
+
         batch_mean = x_flat.mean(axis=0)
         batch_var = x_flat.var(axis=0)
+
         batch_count = x_flat.shape[0]
         delta = batch_mean - self.mean
         tot_count = self.count + batch_count
@@ -71,7 +74,7 @@ class CriticNetwork(nn.Module):
 
 class ActorNetwork(nn.Module):
     def __init__(self, obs_dim, action_dim, hidden_dim=64):
-        # obs_dim = 6 + 2*forage_quantity  (coords of agent0, agent1, stag, plants)
+        # obs_dim = 6 + 2*forage_quantity  (coords (x,y) of agent0, agent1, stag, plants)
         # action_dim = 5  (up, down, left, right, stay)
         super().__init__()
         self.net = nn.Sequential(
@@ -234,8 +237,9 @@ class MAPPO:
 
         while idx < num_rollout_steps:
             obs, _ = self.env.reset()
-            obs = np.asarray(obs, dtype=np.float32)  # (n_agents, obs_dim)
+            obs = np.asarray(obs, dtype=np.float32) 
 
+            # full episode
             while True:
                 idx += 1
                 self.num_steps += 1
@@ -266,7 +270,7 @@ class MAPPO:
                 if idx >= num_rollout_steps or done:
                     break
 
-        # Bootstrap the value of the last observed state
+        # Bootstrap the value of the last observed state (at the end of the while)
         with torch.no_grad():
             _, _, last_value = self.predict(obs)
 
@@ -275,30 +279,10 @@ class MAPPO:
         )
 
         # Update running statistics from this rollout (use raw, unnormalized data)
-        self.obs_rms.update(self.rollout_buffer.obs)
-        self.ret_rms.update(self.rollout_buffer.returns)
+        self.obs_rms.update(self.rollout_buffer.obs) # for the actor
+        self.ret_rms.update(self.rollout_buffer.returns) # for the critic
 
     def compute_loss(self, batch):
-        """
-        obs              (B, A, D)
-        │
-        │ reshape
-        ▼
-        flat_obs         (B*A, D)
-        │
-        │ actor MLP
-        ▼
-        batch_policy     Categorical(batch_shape=(B*A,), event_shape=())
-        │
-        │ log_prob(flat_actions)
-        ▼
-        flat_logp        (B*A,)
-        │
-        │ reshape back
-        ▼
-        new_logp         (B, A)   ← stessa shape di old_logp, advantages
-
-        """
         """
         Compute the PPO loss on a single minibatch.
 
@@ -357,7 +341,7 @@ class MAPPO:
 
         entropy_loss = -entropy.mean()
 
-        # Separate losses: paper uses independent Adam updates on θ and φ.
+        # Separate losses
         actor_total = actor_loss + self.ent_coef * entropy_loss
         critic_total = self.vf_coef * critic_loss
 
@@ -386,6 +370,7 @@ class MAPPO:
             for batch in self.rollout_buffer.get_minibatches(self.batch_size):
                 actor_total, critic_total, metrics = self.compute_loss(batch)
 
+                # Actor
                 self.actor_optim.zero_grad()
                 actor_total.backward()
                 torch.nn.utils.clip_grad_norm_(
@@ -393,6 +378,7 @@ class MAPPO:
                 )
                 self.actor_optim.step()
 
+                # Critic
                 self.critic_optim.zero_grad()
                 critic_total.backward()
                 torch.nn.utils.clip_grad_norm_(
@@ -482,10 +468,6 @@ class MAPPO:
         Roll the current policy out for ``n_episodes`` and return the average
         per-agent and team rewards.
 
-        The actor is queried with ``deterministic=True`` by default so the
-        evaluation reflects the greedy policy rather than the sampling
-        behaviour used during training. Gradients are not tracked.
-
         :param n_episodes: Number of full episodes to play.
         :param deterministic: If True, take argmax actions; otherwise sample.
         :param render: If True, call ``env.render()`` after each step.
@@ -535,15 +517,12 @@ class MAPPO:
         collect rollout, train on it, reset buffer — until the total
         environment-step budget is exhausted.
 
-        :param total_timesteps: Total env steps to train for. Defaults to the
-            value passed to ``__init__``.
-        :param eval_interval: If set, run :meth:`evaluate` every
-            ``eval_interval`` iterations and store the result in the
-            returned history.
+        :param total_timesteps: Total env steps to train for. 
+        :param eval_interval: If set, run `evaluate` every ``eval_interval`` iterations 
         :param eval_episodes: Number of episodes per evaluation call.
         :return: List of dicts (one per iteration) with keys
             'iteration', 'num_steps', plus the keys returned by
-            :meth:`train` and (optionally) 'eval'.
+            `train` and (optionally) 'eval'.
         """
         if total_timesteps is None:
             total_timesteps = self.total_timesteps
@@ -568,11 +547,14 @@ class MAPPO:
         while self.num_steps < total_timesteps:
             prev_steps = self.num_steps
             self.collect_rollouts(self.rollout_steps)
-            # Linear entropy-coefficient annealing: init -> final over the budget
+
+            # Linear entropy-coefficient annealing
             frac = min(1.0, self.num_steps / max(1, total_timesteps))
             self.ent_coef = self.ent_coef_final + (
                 self.ent_coef_init - self.ent_coef_final
             ) * (1.0 - frac)
+
+
             metrics = self.train()
             self.rollout_buffer.reset()
             iteration += 1

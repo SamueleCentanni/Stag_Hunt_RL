@@ -241,6 +241,6 @@ if __name__ == "__main__":
         "log_interval":   10,
     }
 
-    # train( total_timesteps=2_000_000, hparams=hparams, grid_size=(5, 5), max_timesteps=200, stag_follows=False, eval_interval=10, eval_episodes=50)
+    # train(total_timesteps=2_000_000, hparams=hparams, grid_size=(7, 7), max_timesteps=200, stag_follows=False, eval_interval=10, eval_episodes=50)
 
-    test(model_path="mappo_5x5.pt", hparams=hparams, grid_size=(5,5), n_episodes=100, load_renderer=False, stag_follows=False)
+    test(model_path="/home/samuelecentanni/Desktop/University/AAS/exam/ctde_mappo_coords/5x5_stagFollows_False/mappo_5x5.pt", hparams=hparams, grid_size=(5,5), n_episodes=100, load_renderer=True, stag_follows=False)
