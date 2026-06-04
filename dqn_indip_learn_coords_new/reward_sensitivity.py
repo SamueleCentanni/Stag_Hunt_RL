@@ -58,7 +58,7 @@ from ddqn_agent import Agent
 
 GRID_SIZE  = (5, 5)
 NUM_TRAIN  = 5000
-NUM_TEST   = 200
+NUM_TEST   = 100
 
 ARGUMENTS = {
     'learning_rate':    0.001,
@@ -86,6 +86,8 @@ CONFIGS = [
    
     # phase 3: extreme punishment reduction, increase haunting reward
     {"stag_reward": 15,  "mauling_punishment": -1,  "forage_reward": 0},
+    {"stag_reward": 5,  "mauling_punishment": -1,  "forage_reward": 0},
+
 ]
 
 
@@ -187,8 +189,8 @@ def test_config(cfg, arguments, grid_size, num_episodes):
     agent_0 = Agent(state_size, action_size, arguments, device)
     agent_1 = Agent(state_size, action_size, arguments, device)
 
-    agent_0.policy_net.load_state_dict(torch.load(f"sensitivity_agent0_{tag}.pt", map_location=device))
-    agent_1.policy_net.load_state_dict(torch.load(f"sensitivity_agent1_{tag}.pt", map_location=device))
+    agent_0.policy_net.load_state_dict(torch.load(f"reward_sensitivity/sensitivity_agent0_{tag}.pt", map_location=device))
+    agent_1.policy_net.load_state_dict(torch.load(f"reward_sensitivity/sensitivity_agent1_{tag}.pt", map_location=device))
     agent_0.policy_net.eval()
     agent_1.policy_net.eval()
     agent_0.epsilon = 0.0
@@ -279,7 +281,7 @@ if __name__ == "__main__":
     results = []
 
     for cfg in CONFIGS:
-        train_config(cfg, ARGUMENTS, GRID_SIZE, NUM_TRAIN)
+        # train_config(cfg, ARGUMENTS, GRID_SIZE, NUM_TRAIN)
         result = test_config(cfg, ARGUMENTS, GRID_SIZE, NUM_TEST)
         results.append(result)
 

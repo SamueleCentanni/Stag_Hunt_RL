@@ -131,7 +131,7 @@ class Agent:
         with torch.no_grad():
             best_actions = self.policy_net(new_obs).argmax(dim=1)
             max_next_q = self.target_net(new_obs).gather(1, best_actions.unsqueeze(1)).squeeze(1)
-            target_q = rews + self.gamma * max_next_q * (1.0 - dones)
+            target_q = rews + self.gamma * max_next_q * (1.0 - dones) # Q_t = R_{t+1} + gamma * argmax_a (Q)
 
         # Train
         loss_per_sample = self.loss_fn(current_q, target_q)

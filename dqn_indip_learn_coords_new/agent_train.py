@@ -218,7 +218,7 @@ def test(agent_0_path, agent_1_path, num_episodes, arguments, grid_size=(3, 3), 
 
             if load_renderer:
                 env.unwrapped.render()
-                time.sleep(1.0)
+                time.sleep(0.7)
 
                 
             if rewards[0] == 5 and rewards[1] == 5:
@@ -260,10 +260,12 @@ if __name__ == "__main__":
         'replay_steps':    4,
     }
 
-    agent_0_path = "/home/samuelecentanni/Desktop/University/AAS/exam/dqn_indip_learn_coords_new/5x5_results_Stagfollows_False_socialwelf/agent0_dueling_ddqn_per_5x5.pt"
-    agent_1_path = "/home/samuelecentanni/Desktop/University/AAS/exam/dqn_indip_learn_coords_new/5x5_results_Stagfollows_False_socialwelf/agent1_dueling_ddqn_per_5x5.pt"
+    agent_0_path = "/home/samuelecentanni/Desktop/University/AAS/exam/dqn_indip_learn_coords_new/5x5_results_Stagfollows_True/agent0_dueling_ddqn_per_5x5.pt"
+    agent_1_path = "/home/samuelecentanni/Desktop/University/AAS/exam/dqn_indip_learn_coords_new/5x5_results_Stagfollows_True/agent1_dueling_ddqn_per_5x5.pt"
+    
     max_timesteps = 200
-    stag_follows = False
+    stag_follows = True
+    grid_size = (5, 5)
 
     # train(num_episodes=5000, arguments=arguments, grid_size=(5, 5), social_welfare=False, stag_follows=stag_follows, max_timesteps=max_timesteps)
-    test(agent_0_path=agent_0_path, agent_1_path=agent_1_path, num_episodes=100, arguments=arguments, grid_size=(5, 5), load_renderer=True, max_timesteps=max_timesteps, stag_follows=stag_follows)
+    test(agent_0_path=agent_0_path, agent_1_path=agent_1_path, num_episodes=100, arguments=arguments, grid_size=grid_size, load_renderer=True, max_timesteps=max_timesteps, stag_follows=stag_follows)
