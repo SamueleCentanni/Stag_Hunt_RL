@@ -254,7 +254,7 @@ if __name__ == "__main__":
         'batch_size':      32,
         'memory_capacity': 50000,
         'target_frequency': 1000,   
-        'maximum_exploration': 3500000,  
+        'maximum_exploration': 500000,  
         'num_nodes':       64,
         'filling_steps':   1000,
         'replay_steps':    4,
