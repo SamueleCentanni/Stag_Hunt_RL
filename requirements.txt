@@ -1,0 +1,16 @@
+# Core dependencies
+numpy
+torch
+
+# Training utilities
+matplotlib
+tqdm
+rich
+
+# Stag Hunt environment (local package + deps)
+-e ./Gymnasium-Stag-Hunt
+
+gymnasium
+pettingzoo
+pygame
+opencv-python
